@@ -1,9 +1,11 @@
 # Python
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 *.so
 .Python
+rainbowEnv/
 env/
 venv/
 ENV/
@@ -152,3 +154,6 @@ credentials.json
 *.pem
 *.key
 *.crt
+
+# 邀请码记录
+invitation_codes.txt
