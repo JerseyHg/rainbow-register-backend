@@ -1,0 +1,32 @@
+# FastAPI核心
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# 数据库
+sqlalchemy>=2.0.25
+alembic>=1.13.1
+
+# 数据验证
+pydantic>=2.6.0
+pydantic-settings>=2.1.0
+email-validator>=2.1.0
+
+# 安全认证（使用 PyJWT）
+PyJWT[crypto]>=2.8.0
+cryptography>=42.0.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.1.2
+
+# HTTP客户端
+httpx>=0.26.0
+requests>=2.31.0
+
+# 文件处理（让pip自动选择版本）
+Pillow>=10.0.0
+
+# Excel导出
+openpyxl>=3.1.2
+
+# 工具
+python-dotenv>=1.0.1
