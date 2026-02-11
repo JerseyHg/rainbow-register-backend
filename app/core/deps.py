@@ -2,10 +2,14 @@
 依赖注入
 """
 from typing import Generator
-from fastapi import Depends, HTTPException, status, Header
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.db.base import SessionLocal
 from app.core.security import verify_token
+
+# Security schemes - these make the "Authorize" button appear in Swagger UI
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_db() -> Generator:
@@ -17,34 +21,35 @@ def get_db() -> Generator:
         db.close()
 
 
-def get_current_user_openid(authorization: str = Header(None)) -> str:
+def get_current_user_openid(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+) -> str:
     """
     从请求头获取用户openid
     用户端API使用
     """
-    if not authorization:
+    if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header"
         )
-    return authorization
+    return credentials.credentials
 
 
-def get_current_admin(authorization: str = Header(None)) -> dict:
+def get_current_admin(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+) -> dict:
     """
     验证管理员token
     管理端API使用
     """
-    if not authorization:
+    if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header"
         )
 
-    # 移除 "Bearer " 前缀
-    token = authorization.replace("Bearer ", "")
-
-    payload = verify_token(token)
+    payload = verify_token(credentials.credentials)
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -42,7 +42,7 @@ async def submit_profile(
     profile_data['status'] = 'pending'
 
     # 将expectation对象转为dict（JSON存储）
-    if profile_data.get('expectation'):
+    if profile_data.get('expectation') and hasattr(profile_data['expectation'], 'dict'):
         profile_data['expectation'] = profile_data['expectation'].dict()
 
     # 4. 创建资料
