@@ -25,3 +25,7 @@ class MyCodesResponse(BaseModel):
     code: str
     is_used: bool
     created_at: str
+
+class AutoLoginRequest(BaseModel):
+    """自动登录请求"""
+    wx_code: str = Field(..., description="微信登录code")

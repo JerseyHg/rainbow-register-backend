@@ -4,7 +4,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user_openid
-from app.schemas.invitation import InvitationVerifyRequest, InvitationVerifyResponse, MyCodesResponse
+from app.schemas.invitation import InvitationVerifyRequest, InvitationVerifyResponse, MyCodesResponse, AutoLoginRequest
 from app.schemas.common import ResponseModel
 from app.crud import crud_invitation, crud_profile
 from app.services.wechat import get_openid_from_code
@@ -147,4 +147,38 @@ async def get_my_codes(
             "used": used_count,
             "remaining": len(invitations) - used_count
         }
+    )
+
+@router.post("/auto-login", response_model=InvitationVerifyResponse)
+async def auto_login(
+        request: AutoLoginRequest,
+        db: Session = Depends(get_db)
+):
+    """
+    自动登录（老用户通过微信code自动识别）
+    """
+    # 1. 通过微信code获取openid
+    openid = await get_openid_from_code(request.wx_code)
+
+    if not openid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="微信登录失败"
+        )
+
+    # 2. 检查用户是否已注册
+    existing_profile = crud_profile.get_profile_by_openid(db, openid)
+
+    if not existing_profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="非注册用户"
+        )
+
+    # 3. 返回用户信息
+    return InvitationVerifyResponse(
+        success=True,
+        message="自动登录成功",
+        openid=openid,
+        has_profile=True
     )
