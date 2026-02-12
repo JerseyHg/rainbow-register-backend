@@ -8,6 +8,7 @@ from app.schemas.profile import ProfileSubmitRequest, ProfileResponse
 from app.schemas.common import ResponseModel
 from app.crud import crud_profile, crud_invitation
 from app.utils.helpers import generate_serial_number
+from app.models.invitation_code import InvitationCode
 from app.core.config import settings
 from app.services.invitation import generate_invitation_code, calculate_expire_time
 
@@ -40,6 +41,23 @@ async def submit_profile(
     profile_data = request.dict()
     profile_data['serial_number'] = serial_number
     profile_data['status'] = 'pending'
+
+    # 4. 自动识别推荐人：通过openid找到该用户使用的邀请码，再反查创建者
+    invitation = db.query(InvitationCode).filter(
+        InvitationCode.used_by_openid == openid
+    ).first()
+
+    if invitation:
+        profile_data['invitation_code_used'] = invitation.code
+        if invitation.created_by_type == 'user' and invitation.created_by:
+            referrer = crud_profile.get_profile_by_id(db, invitation.created_by)
+            if referrer:
+                profile_data['referred_by'] = f"{referrer.name}（{referrer.serial_number}）"
+                profile_data['invited_by'] = referrer.id
+            else:
+                profile_data['referred_by'] = f"用户ID:{invitation.created_by}"
+        elif invitation.created_by_type == 'admin':
+            profile_data['referred_by'] = "管理员"
 
     # 将expectation对象转为dict（JSON存储）
     if profile_data.get('expectation') and hasattr(profile_data['expectation'], 'dict'):

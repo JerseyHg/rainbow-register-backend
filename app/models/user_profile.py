@@ -36,6 +36,10 @@ class UserProfile(Base):
     mbti = Column(String(10), comment="MBTI")
     health_condition = Column(Text, comment="健康状况")
     housing_status = Column(String(50), comment="住房情况")
+    dating_purpose = Column(String(50), comment="交友目的：找恋人/找朋友/都可以")
+    want_children = Column(String(20), comment="是否需要孩子：想要/不想要/顺其自然/不确定")
+    wechat_id = Column(String(50), comment="微信号")
+    referred_by = Column(String(100), comment="推荐人")
 
     # 兴趣爱好（JSON数组）
     hobbies = Column(JSON, comment="兴趣爱好")

@@ -40,6 +40,12 @@ class ProfileSubmitRequest(BaseModel):
     health_condition: Optional[str] = None
     housing_status: Optional[str] = None
 
+    # ===== 新增字段 =====
+    dating_purpose: Optional[str] = None      # 交友目的
+    want_children: Optional[str] = None       # 是否需要孩子
+    wechat_id: Optional[str] = None           # 微信号
+    # ===== 新增字段结束 =====
+
     # 兴趣爱好
     hobbies: List[str] = []
     lifestyle: Optional[str] = None

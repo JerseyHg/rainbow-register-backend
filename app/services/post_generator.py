@@ -64,6 +64,14 @@ def generate_post_content(profile: Dict[str, Any]) -> Dict[str, str]:
     if traits:
         content_lines.append(' '.join(traits))
 
+    # ===== 新增：交友目的 =====
+    if profile.get('dating_purpose'):
+        content_lines.append(f"交友目的：{profile['dating_purpose']}")
+
+    # ===== 新增：是否需要孩子 =====
+    if profile.get('want_children'):
+        content_lines.append(f"孩子意愿：{profile['want_children']}")
+
     # 生活方式
     if profile.get('lifestyle'):
         content_lines.append(profile['lifestyle'])
