@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.models.user_profile import UserProfile
 from app.models.invitation_code import InvitationCode
 from datetime import timedelta
+from collections import defaultdict
 
 router = APIRouter()
 
@@ -670,6 +671,151 @@ async def get_user_network_detail(
                 "approved_count": approved,
                 "rejected_count": rejected,
                 "approval_rate": round(approved / reviewed * 100, 1) if reviewed > 0 else None,
+            }
+        }
+    )
+
+# 中国主要城市坐标表
+CITY_COORDINATES = {
+    "北京": (39.9042, 116.4074),
+    "上海": (31.2304, 121.4737),
+    "深圳": (22.5431, 114.0579),
+    "广州": (23.1291, 113.2644),
+    "杭州": (30.2741, 120.1551),
+    "成都": (30.5728, 104.0668),
+    "武汉": (30.5928, 114.3055),
+    "南京": (32.0603, 118.7969),
+    "厦门": (24.4798, 118.0894),
+    "重庆": (29.5630, 106.5516),
+    "西安": (34.3416, 108.9398),
+    "苏州": (31.2990, 120.5853),
+    "长沙": (28.2280, 112.9388),
+    "天津": (39.3434, 117.3616),
+    "郑州": (34.7466, 113.6253),
+    "青岛": (36.0671, 120.3826),
+    "大连": (38.9140, 121.6147),
+    "沈阳": (41.8057, 123.4315),
+    "济南": (36.6512, 117.1201),
+    "哈尔滨": (45.8038, 126.5340),
+    "昆明": (25.0389, 102.7183),
+    "福州": (26.0745, 119.2965),
+    "合肥": (31.8206, 117.2272),
+    "长春": (43.8171, 125.3235),
+    "石家庄": (38.0428, 114.5149),
+    "贵阳": (26.6470, 106.6302),
+    "南宁": (22.8170, 108.3665),
+    "太原": (37.8706, 112.5489),
+    "南昌": (28.6820, 115.8579),
+    "珠海": (22.2710, 113.5767),
+    "佛山": (23.0218, 113.1219),
+    "东莞": (23.0430, 113.7633),
+    "无锡": (31.4912, 120.3119),
+    "宁波": (29.8683, 121.5440),
+    "温州": (28.0000, 120.6722),
+    "烟台": (37.4638, 121.4479),
+    "兰州": (36.0611, 103.8343),
+    "海口": (20.0174, 110.3492),
+    "三亚": (18.2528, 109.5120),
+    "拉萨": (29.6500, 91.1000),
+    "乌鲁木齐": (43.8256, 87.6168),
+    "呼和浩特": (40.8427, 111.7500),
+    "银川": (38.4872, 106.2309),
+    "西宁": (36.6171, 101.7782),
+}
+
+
+def extract_city(work_location: str) -> str | None:
+    """从 work_location 提取城市名"""
+    if not work_location:
+        return None
+
+    loc = work_location.strip()
+
+    # 先尝试精确匹配（3字城市优先）
+    for city_name in sorted(CITY_COORDINATES.keys(), key=len, reverse=True):
+        if loc.startswith(city_name):
+            return city_name
+
+    # 尝试前3个字
+    if len(loc) >= 3 and loc[:3] in CITY_COORDINATES:
+        return loc[:3]
+
+    # 尝试前2个字
+    if len(loc) >= 2 and loc[:2] in CITY_COORDINATES:
+        return loc[:2]
+
+    return loc  # 返回原始值，前端可以标记为未知
+
+
+@router.get("/map/users", response_model=ResponseModel)
+async def get_map_users(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db)
+):
+    """
+    获取用户地理分布数据
+    """
+    all_profiles = db.query(UserProfile).filter(
+        UserProfile.work_location.isnot(None),
+        UserProfile.work_location != ""
+    ).all()
+
+    # 按城市分组
+    city_groups = defaultdict(list)
+    for p in all_profiles:
+        city = extract_city(p.work_location)
+        if city:
+            city_groups[city].append(p)
+
+    # 构建返回数据
+    cities = []
+    for city_name, profiles in city_groups.items():
+        coords = CITY_COORDINATES.get(city_name)
+        lat = coords[0] if coords else None
+        lng = coords[1] if coords else None
+
+        status_counts = {"approved": 0, "published": 0, "pending": 0, "rejected": 0}
+        users = []
+        for p in profiles:
+            if p.status in status_counts:
+                status_counts[p.status] += 1
+            users.append({
+                "id": p.id,
+                "name": p.name,
+                "serial_number": p.serial_number,
+                "gender": p.gender,
+                "age": p.age,
+                "status": p.status,
+                "work_location": p.work_location,
+                "industry": p.industry,
+            })
+
+        cities.append({
+            "city": city_name,
+            "lat": lat,
+            "lng": lng,
+            "count": len(profiles),
+            "status_counts": status_counts,
+            "users": users,
+        })
+
+    # 按人数排序
+    cities.sort(key=lambda x: x["count"], reverse=True)
+
+    # 全局统计
+    total_users = sum(c["count"] for c in cities)
+    total_cities = len([c for c in cities if c["lat"]])
+
+    return ResponseModel(
+        success=True,
+        message="获取成功",
+        data={
+            "cities": cities,
+            "stats": {
+                "total_users": total_users,
+                "total_cities": total_cities,
+                "top_city": cities[0]["city"] if cities else None,
+                "top_city_count": cities[0]["count"] if cities else 0,
             }
         }
     )
