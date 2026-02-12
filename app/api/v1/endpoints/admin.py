@@ -103,6 +103,40 @@ async def get_pending_profiles(
         }
     )
 
+@router.get("/profiles/list", response_model=ResponseModel)
+async def list_profiles(
+        status: str = "pending",
+        page: int = 1,
+        limit: int = 20,
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db)
+):
+    """按状态获取资料列表"""
+    skip = (page - 1) * limit
+    query = db.query(UserProfile)
+    if status != "all":
+        query = query.filter(UserProfile.status == status)
+    profiles = query.order_by(UserProfile.create_time.desc()).offset(skip).limit(limit).all()
+    total = query.count()
+
+    data = []
+    for profile in profiles:
+        data.append({
+            "id": profile.id,
+            "serial_number": profile.serial_number,
+            "name": profile.name,
+            "gender": profile.gender,
+            "age": profile.age,
+            "work_location": profile.work_location,
+            "create_time": profile.create_time.strftime("%Y-%m-%d %H:%M:%S") if profile.create_time else None,
+            "status": profile.status,
+        })
+
+    return ResponseModel(
+        success=True,
+        message="获取成功",
+        data={"total": total, "page": page, "limit": limit, "list": data}
+    )
 
 @router.get("/profile/{profile_id}/detail", response_model=ResponseModel)
 async def get_profile_detail(
