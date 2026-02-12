@@ -451,3 +451,225 @@ async def list_invitations(
         message="获取成功",
         data={"list": data, "total": len(data)}
     )
+
+@router.get("/network/tree", response_model=ResponseModel)
+async def get_invitation_network(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db)
+):
+    """
+    获取邀请关系网络树
+    返回所有用户的邀请关系以及质量指标
+    """
+    # 1. 获取所有用户
+    all_profiles = db.query(UserProfile).order_by(UserProfile.create_time.asc()).all()
+
+    # 2. 构建 user_id -> profile 映射
+    profile_map = {p.id: p for p in all_profiles}
+
+    # 3. 构建 inviter_id -> [被邀请人列表] 映射
+    children_map = {}  # inviter_id -> [profile, ...]
+    root_profiles = []  # 管理员直接邀请的（invited_by 为 None 或 0）
+
+    for p in all_profiles:
+        if p.invited_by and p.invited_by in profile_map:
+            children_map.setdefault(p.invited_by, []).append(p)
+        else:
+            root_profiles.append(p)
+
+    # 4. 计算每个用户的质量指标
+    def calc_quality(user_id):
+        """计算用户邀请质量"""
+        children = children_map.get(user_id, [])
+        if not children:
+            return {
+                "invited_count": 0,
+                "approved_count": 0,
+                "rejected_count": 0,
+                "pending_count": 0,
+                "approval_rate": None,
+                "quality_score": None,
+                "quality_label": "无邀请",
+            }
+
+        approved = sum(1 for c in children if c.status in ('approved', 'published'))
+        rejected = sum(1 for c in children if c.status == 'rejected')
+        pending = sum(1 for c in children if c.status == 'pending')
+        total = len(children)
+        reviewed = approved + rejected
+
+        approval_rate = round(approved / reviewed * 100, 1) if reviewed > 0 else None
+
+        # 质量评分: 考虑通过率和邀请人数
+        if reviewed == 0:
+            score = None
+            label = "待评估"
+        elif approval_rate >= 80:
+            score = "A"
+            label = "优质"
+        elif approval_rate >= 60:
+            score = "B"
+            label = "良好"
+        elif approval_rate >= 40:
+            score = "C"
+            label = "一般"
+        else:
+            score = "D"
+            label = "较差"
+
+        return {
+            "invited_count": total,
+            "approved_count": approved,
+            "rejected_count": rejected,
+            "pending_count": pending,
+            "approval_rate": approval_rate,
+            "quality_score": score,
+            "quality_label": label,
+        }
+
+    # 5. 递归构建树 + 计算子树总人数
+    def build_node(profile, depth=0):
+        children = children_map.get(profile.id, [])
+        quality = calc_quality(profile.id)
+
+        child_nodes = [build_node(c, depth + 1) for c in children]
+
+        # 子树总人数（含自己的下级、下下级...）
+        descendant_count = sum(cn["descendant_count"] + 1 for cn in child_nodes)
+
+        return {
+            "id": profile.id,
+            "serial_number": profile.serial_number,
+            "name": profile.name,
+            "gender": profile.gender,
+            "age": profile.age,
+            "work_location": profile.work_location,
+            "status": profile.status,
+            "create_time": profile.create_time.strftime("%Y-%m-%d") if profile.create_time else None,
+            "referred_by": profile.referred_by,
+            "depth": depth,
+            "quality": quality,
+            "descendant_count": descendant_count,
+            "children": child_nodes,
+        }
+
+    # 6. 构建完整的树
+    tree = [build_node(p, 0) for p in root_profiles]
+
+    # 7. 全局统计
+    total_users = len(all_profiles)
+    total_approved = sum(1 for p in all_profiles if p.status in ('approved', 'published'))
+    total_rejected = sum(1 for p in all_profiles if p.status == 'rejected')
+    total_pending = sum(1 for p in all_profiles if p.status == 'pending')
+
+    # 找出邀请质量最好和最差的用户
+    inviters = []
+    for p in all_profiles:
+        q = calc_quality(p.id)
+        if q["invited_count"] > 0:
+            inviters.append({
+                "id": p.id,
+                "name": p.name,
+                "serial_number": p.serial_number,
+                **q,
+            })
+
+    inviters.sort(key=lambda x: (x["approval_rate"] or 0), reverse=True)
+
+    # 最大邀请深度
+    def max_depth(nodes, current=0):
+        if not nodes:
+            return current
+        return max(max_depth(n.get("children", []), current + 1) for n in nodes)
+
+    stats = {
+        "total_users": total_users,
+        "total_approved": total_approved,
+        "total_rejected": total_rejected,
+        "total_pending": total_pending,
+        "overall_approval_rate": round(total_approved / (total_approved + total_rejected) * 100, 1) if (total_approved + total_rejected) > 0 else 0,
+        "max_depth": max_depth(tree),
+        "top_inviters": inviters[:5],
+        "worst_inviters": list(reversed(inviters[-3:])) if len(inviters) >= 3 else [],
+    }
+
+    return ResponseModel(
+        success=True,
+        message="获取成功",
+        data={
+            "tree": tree,
+            "stats": stats,
+        }
+    )
+
+
+@router.get("/network/user/{user_id}", response_model=ResponseModel)
+async def get_user_network_detail(
+        user_id: int,
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db)
+):
+    """
+    获取单个用户的邀请网络详情
+    """
+    profile = db.query(UserProfile).filter(UserProfile.id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 该用户邀请的所有人
+    invitees = db.query(UserProfile).filter(UserProfile.invited_by == user_id).all()
+
+    # 该用户的邀请人
+    inviter = None
+    if profile.invited_by:
+        inviter_profile = db.query(UserProfile).filter(UserProfile.id == profile.invited_by).first()
+        if inviter_profile:
+            inviter = {
+                "id": inviter_profile.id,
+                "name": inviter_profile.name,
+                "serial_number": inviter_profile.serial_number,
+                "status": inviter_profile.status,
+            }
+
+    invitee_list = []
+    for inv in invitees:
+        invitee_list.append({
+            "id": inv.id,
+            "name": inv.name,
+            "serial_number": inv.serial_number,
+            "gender": inv.gender,
+            "age": inv.age,
+            "work_location": inv.work_location,
+            "status": inv.status,
+            "create_time": inv.create_time.strftime("%Y-%m-%d") if inv.create_time else None,
+        })
+
+    approved = sum(1 for i in invitees if i.status in ('approved', 'published'))
+    rejected = sum(1 for i in invitees if i.status == 'rejected')
+    reviewed = approved + rejected
+
+    return ResponseModel(
+        success=True,
+        message="获取成功",
+        data={
+            "user": {
+                "id": profile.id,
+                "name": profile.name,
+                "serial_number": profile.serial_number,
+                "gender": profile.gender,
+                "age": profile.age,
+                "work_location": profile.work_location,
+                "status": profile.status,
+                "create_time": profile.create_time.strftime("%Y-%m-%d") if profile.create_time else None,
+                "referred_by": profile.referred_by,
+            },
+            "inviter": inviter,
+            "invitees": invitee_list,
+            "quality": {
+                "invited_count": len(invitees),
+                "approved_count": approved,
+                "rejected_count": rejected,
+                "approval_rate": round(approved / reviewed * 100, 1) if reviewed > 0 else None,
+            }
+        }
+    )
