@@ -173,7 +173,7 @@ async def archive_profile(
         )
 
     # 只有published状态可以下架
-    if profile.status != 'published':
+    if profile.status not in ('approved', 'published'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="只有已发布的资料可以下架"

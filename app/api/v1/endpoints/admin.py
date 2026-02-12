@@ -11,6 +11,8 @@ from app.crud import crud_admin, crud_profile, crud_invitation
 from app.services.post_generator import generate_post_content
 from app.services.invitation import generate_invitation_code, calculate_expire_time
 from app.core.config import settings
+from app.models.user_profile import UserProfile
+from app.models.invitation_code import InvitationCode
 from datetime import timedelta
 
 router = APIRouter()
@@ -359,4 +361,59 @@ async def generate_invitations(
             "codes": generated_codes,
             "count": count
         }
+    )
+
+@router.get("/dashboard/stats", response_model=ResponseModel)
+async def get_dashboard_stats(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db)
+):
+    """仪表盘统计"""
+    pending = db.query(UserProfile).filter(UserProfile.status == 'pending').count()
+    approved = db.query(UserProfile).filter(UserProfile.status == 'approved').count()
+    published = db.query(UserProfile).filter(UserProfile.status == 'published').count()
+    total_codes = db.query(InvitationCode).count()
+    used_codes = db.query(InvitationCode).filter(InvitationCode.is_used == True).count()
+
+    return ResponseModel(
+        success=True,
+        message="获取成功",
+        data={
+            "pending": pending,
+            "approved": approved,
+            "published": published,
+            "totalCodes": total_codes,
+            "usedCodes": used_codes
+        }
+    )
+
+
+@router.get("/invitation/list", response_model=ResponseModel)
+async def list_invitations(
+        page: int = 1,
+        limit: int = 50,
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db)
+):
+    """获取邀请码列表"""
+    skip = (page - 1) * limit
+    invitations = db.query(InvitationCode).order_by(
+        InvitationCode.create_time.desc()
+    ).offset(skip).limit(limit).all()
+
+    data = []
+    for inv in invitations:
+        data.append({
+            "code": inv.code,
+            "is_used": inv.is_used,
+            "created_by_type": inv.created_by_type,
+            "notes": inv.notes,
+            "created_at": inv.create_time.strftime("%Y-%m-%d %H:%M:%S") if inv.create_time else None,
+            "used_at": inv.used_at.strftime("%Y-%m-%d %H:%M:%S") if inv.used_at else None,
+        })
+
+    return ResponseModel(
+        success=True,
+        message="获取成功",
+        data={"list": data, "total": len(data)}
     )

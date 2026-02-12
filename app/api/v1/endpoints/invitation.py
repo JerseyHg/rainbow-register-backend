@@ -111,7 +111,7 @@ async def get_my_codes(
         )
 
     # 只有已发布的用户才有邀请码
-    if profile.status != 'published':
+    if profile.status not in ('approved', 'published'):
         return ResponseModel(
             success=True,
             message="资料尚未发布，暂无邀请码",
