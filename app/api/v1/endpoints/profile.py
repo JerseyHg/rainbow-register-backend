@@ -186,3 +186,36 @@ async def archive_profile(
         success=True,
         message="已下架"
     )
+
+
+@router.delete("/delete", response_model=ResponseModel)
+async def delete_profile(
+        openid: str = Depends(get_current_user_openid),
+        db: Session = Depends(get_db)
+):
+    """
+    删除资料（仅 pending 或 rejected 状态可删除）
+    用户主动撤回报名信息，永久删除。
+    """
+    profile = crud_profile.get_profile_by_openid(db, openid)
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="资料不存在"
+        )
+
+    # 只有 pending 或 rejected 状态可以删除
+    if profile.status not in ['pending', 'rejected']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"当前状态({profile.status})不允许删除，请联系管理员"
+        )
+
+    # 执行删除
+    crud_profile.delete_profile(db, profile.id)
+
+    return ResponseModel(
+        success=True,
+        message="资料已删除"
+    )

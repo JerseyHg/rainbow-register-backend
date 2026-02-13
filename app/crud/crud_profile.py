@@ -44,6 +44,16 @@ def update_profile(db: Session, profile_id: int, data: dict) -> Optional[UserPro
     return profile
 
 
+def delete_profile(db: Session, profile_id: int) -> bool:
+    """删除用户资料"""
+    profile = get_profile_by_id(db, profile_id)
+    if not profile:
+        return False
+    db.delete(profile)
+    db.commit()
+    return True
+
+
 def get_pending_profiles(db: Session, skip: int = 0, limit: int = 20) -> List[UserProfile]:
     """获取待审核列表"""
     return db.query(UserProfile).filter(
