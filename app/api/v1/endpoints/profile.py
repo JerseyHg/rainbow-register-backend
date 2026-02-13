@@ -102,7 +102,26 @@ async def get_my_profile(
             "rejection_reason": profile.rejection_reason,
             "create_time": profile.create_time.strftime("%Y-%m-%d %H:%M:%S"),
             "published_at": profile.published_at.strftime("%Y-%m-%d %H:%M:%S") if profile.published_at else None,
-            "invitation_quota": profile.invitation_quota
+            "invitation_quota": profile.invitation_quota,
+            # 表单字段（编辑模式需要）
+            "name": profile.name,
+            "gender": profile.gender,
+            "age": profile.age,
+            "height": profile.height,
+            "weight": profile.weight,
+            "marital_status": profile.marital_status,
+            "body_type": profile.body_type,
+            "hometown": profile.hometown,
+            "work_location": profile.work_location,
+            "industry": profile.industry,
+            "constellation": profile.constellation,
+            "mbti": profile.mbti,
+            "health_condition": profile.health_condition,
+            "wechat_id": profile.wechat_id,
+            "hobbies": profile.hobbies,
+            "lifestyle": profile.lifestyle,
+            "special_requirements": profile.special_requirements,
+            "photos": profile.photos,
         }
     )
 
