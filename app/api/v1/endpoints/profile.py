@@ -7,7 +7,7 @@ from app.core.deps import get_db, get_current_user_openid
 from app.schemas.profile import ProfileSubmitRequest, ProfileResponse
 from app.schemas.common import ResponseModel
 from app.crud import crud_profile, crud_invitation
-from app.utils.helpers import generate_serial_number
+from app.utils.helpers import generate_serial_number, calculate_age, calculate_constellation
 from app.models.invitation_code import InvitationCode
 from app.core.config import settings
 from app.services.invitation import generate_invitation_code, calculate_expire_time
@@ -41,6 +41,14 @@ async def submit_profile(
     profile_data = request.dict()
     profile_data['serial_number'] = serial_number
     profile_data['status'] = 'pending'
+
+    # ★ 如果有生日，自动计算年龄和星座
+    if profile_data.get('birthday'):
+        try:
+            profile_data['age'] = calculate_age(profile_data['birthday'])
+            profile_data['constellation'] = calculate_constellation(profile_data['birthday'])
+        except (ValueError, TypeError):
+            pass  # 生日格式不对时保留前端传来的age和constellation
 
     # 4. 自动识别推荐人：通过openid找到该用户使用的邀请码，再反查创建者
     invitation = db.query(InvitationCode).filter(
@@ -106,6 +114,7 @@ async def get_my_profile(
             # 表单字段（编辑模式需要）
             "name": profile.name,
             "gender": profile.gender,
+            "birthday": profile.birthday,
             "age": profile.age,
             "height": profile.height,
             "weight": profile.weight,
@@ -120,6 +129,7 @@ async def get_my_profile(
             "wechat_id": profile.wechat_id,
             "hobbies": profile.hobbies,
             "lifestyle": profile.lifestyle,
+            "activity_expectation": profile.activity_expectation,
             "special_requirements": profile.special_requirements,
             "photos": profile.photos,
         }
@@ -152,6 +162,14 @@ async def update_profile(
 
     # 准备更新数据
     update_data = request.dict()
+
+    # ★ 如果有生日，自动计算年龄和星座
+    if update_data.get('birthday'):
+        try:
+            update_data['age'] = calculate_age(update_data['birthday'])
+            update_data['constellation'] = calculate_constellation(update_data['birthday'])
+        except (ValueError, TypeError):
+            pass
 
     # 如果是rejected状态，更新后改为pending
     if profile.status == 'rejected':
@@ -191,14 +209,12 @@ async def archive_profile(
             detail="资料不存在"
         )
 
-    # 只有published状态可以下架
-    if profile.status not in ('approved', 'published'):
+    if profile.status not in ['approved', 'published']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="只有已发布的资料可以下架"
+            detail=f"当前状态({profile.status})不允许下架"
         )
 
-    # 更新状态
     crud_profile.update_profile(db, profile.id, {"status": "archived"})
 
     return ResponseModel(
@@ -213,8 +229,7 @@ async def delete_profile(
         db: Session = Depends(get_db)
 ):
     """
-    删除资料（仅 pending 或 rejected 状态可删除）
-    用户主动撤回报名信息，永久删除。
+    删除资料（仅 pending/rejected 状态可删除）
     """
     profile = crud_profile.get_profile_by_openid(db, openid)
 
@@ -224,17 +239,15 @@ async def delete_profile(
             detail="资料不存在"
         )
 
-    # 只有 pending 或 rejected 状态可以删除
     if profile.status not in ['pending', 'rejected']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"当前状态({profile.status})不允许删除，请联系管理员"
+            detail=f"当前状态({profile.status})不允许删除"
         )
 
-    # 执行删除
     crud_profile.delete_profile(db, profile.id)
 
     return ResponseModel(
         success=True,
-        message="资料已删除"
+        message="已删除"
     )

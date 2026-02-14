@@ -63,6 +63,10 @@ def generate_post_content(profile: Dict[str, Any]) -> Dict[str, str]:
     if profile.get('lifestyle'):
         content_lines.append(profile['lifestyle'])
 
+    # ★ 新增：对活动的期望
+    if profile.get('activity_expectation'):
+        content_lines.append(f"对活动的期望：{profile['activity_expectation']}")
+
     content_lines.append("\n期望匹配")
 
     if expectation:

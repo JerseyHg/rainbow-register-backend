@@ -20,6 +20,7 @@ class UserProfile(Base):
     # 基本信息
     name = Column(String(50), nullable=False, comment="姓名/昵称")
     gender = Column(String(10), nullable=False, comment="性别")
+    birthday = Column(String(10), comment="生日 YYYY-MM-DD")
     age = Column(Integer, nullable=False, comment="年龄")
     height = Column(Integer, nullable=False, comment="身高cm")
     weight = Column(Integer, nullable=False, comment="体重kg")
@@ -44,6 +45,9 @@ class UserProfile(Base):
     # 兴趣爱好（JSON数组）
     hobbies = Column(JSON, comment="兴趣爱好")
     lifestyle = Column(Text, comment="生活方式")
+
+    # 对活动的期望
+    activity_expectation = Column(Text, comment="对活动的期望")
 
     # 出柜状态
     coming_out_status = Column(String(50), comment="出柜状态")

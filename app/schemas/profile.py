@@ -23,6 +23,7 @@ class ProfileSubmitRequest(BaseModel):
     # 基本信息
     name: str = Field(..., min_length=1, max_length=50)
     gender: str = Field(..., min_length=1, max_length=10)
+    birthday: Optional[str] = None            # 生日 YYYY-MM-DD
     age: int = Field(..., ge=18, le=80)
     height: int = Field(..., ge=140, le=220)
     weight: int = Field(..., ge=30, le=200)
@@ -49,6 +50,9 @@ class ProfileSubmitRequest(BaseModel):
     # 兴趣爱好
     hobbies: List[str] = []
     lifestyle: Optional[str] = None
+
+    # 对活动的期望
+    activity_expectation: Optional[str] = None
 
     # 出柜状态
     coming_out_status: Optional[str] = None
