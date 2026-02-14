@@ -11,8 +11,50 @@ from app.utils.helpers import generate_serial_number, calculate_age, calculate_c
 from app.models.invitation_code import InvitationCode
 from app.core.config import settings
 from app.services.invitation import generate_invitation_code, calculate_expire_time
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _cleanup_user_cos_photos(openid: str):
+    """
+    ★ 清理用户在COS上的所有照片
+    删除 photos/{openid}/ 目录下所有文件
+    静默失败，不影响主流程
+    """
+    try:
+        if not settings.COS_SECRET_ID or not settings.COS_DOMAIN:
+            return
+
+        from qcloud_cos import CosConfig, CosS3Client
+
+        config = CosConfig(
+            Region=settings.COS_REGION,
+            SecretId=settings.COS_SECRET_ID,
+            SecretKey=settings.COS_SECRET_KEY,
+        )
+        client = CosS3Client(config)
+
+        prefix = f"{settings.COS_UPLOAD_PREFIX}/{openid}/"
+
+        response = client.list_objects(
+            Bucket=settings.COS_BUCKET,
+            Prefix=prefix,
+            MaxKeys=100,
+        )
+
+        contents = response.get('Contents', [])
+        if contents:
+            delete_objects = [{'Key': obj['Key']} for obj in contents]
+            client.delete_objects(
+                Bucket=settings.COS_BUCKET,
+                Delete={'Object': delete_objects, 'Quiet': 'true'},
+            )
+            logger.info(f"清理COS照片成功: {openid}, 共 {len(delete_objects)} 个文件")
+    except Exception as e:
+        logger.warning(f"清理COS照片失败（不影响删除操作）: {e}")
 
 
 @router.post("/submit", response_model=ResponseModel)
@@ -24,7 +66,6 @@ async def submit_profile(
     """
     提交用户资料
     """
-    # 1. 检查用户是否已经提交过资料
     existing_profile = crud_profile.get_profile_by_openid(db, openid)
 
     if existing_profile:
@@ -33,24 +74,20 @@ async def submit_profile(
             detail="您已经提交过资料，请使用更新接口"
         )
 
-    # 2. 生成编号
     last_number = crud_profile.get_last_serial_number(db)
     serial_number = generate_serial_number(last_number)
 
-    # 3. 准备数据
     profile_data = request.dict()
     profile_data['serial_number'] = serial_number
     profile_data['status'] = 'pending'
 
-    # ★ 如果有生日，自动计算年龄和星座
     if profile_data.get('birthday'):
         try:
             profile_data['age'] = calculate_age(profile_data['birthday'])
             profile_data['constellation'] = calculate_constellation(profile_data['birthday'])
         except (ValueError, TypeError):
-            pass  # 生日格式不对时保留前端传来的age和constellation
+            pass
 
-    # 4. 自动识别推荐人：通过openid找到该用户使用的邀请码，再反查创建者
     invitation = db.query(InvitationCode).filter(
         InvitationCode.used_by_openid == openid
     ).first()
@@ -67,11 +104,9 @@ async def submit_profile(
         elif invitation.created_by_type == 'admin':
             profile_data['referred_by'] = "管理员"
 
-    # 将expectation对象转为dict（JSON存储）
     if profile_data.get('expectation') and hasattr(profile_data['expectation'], 'dict'):
         profile_data['expectation'] = profile_data['expectation'].dict()
 
-    # 创建资料
     profile = crud_profile.create_profile(db, openid, profile_data)
 
     return ResponseModel(
@@ -111,7 +146,6 @@ async def get_my_profile(
             "create_time": profile.create_time.strftime("%Y-%m-%d %H:%M:%S"),
             "published_at": profile.published_at.strftime("%Y-%m-%d %H:%M:%S") if profile.published_at else None,
             "invitation_quota": profile.invitation_quota,
-            # 表单字段（编辑模式需要）
             "name": profile.name,
             "gender": profile.gender,
             "birthday": profile.birthday,
@@ -153,17 +187,14 @@ async def update_profile(
             detail="资料不存在"
         )
 
-    # 只有pending或rejected状态可以修改
     if profile.status not in ['pending', 'rejected']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"当前状态({profile.status})不允许修改"
         )
 
-    # 准备更新数据
     update_data = request.dict()
 
-    # ★ 如果有生日，自动计算年龄和星座
     if update_data.get('birthday'):
         try:
             update_data['age'] = calculate_age(update_data['birthday'])
@@ -171,16 +202,13 @@ async def update_profile(
         except (ValueError, TypeError):
             pass
 
-    # 如果是rejected状态，更新后改为pending
     if profile.status == 'rejected':
         update_data['status'] = 'pending'
         update_data['rejection_reason'] = None
 
-    # 转换expectation
     if update_data.get('expectation'):
         update_data['expectation'] = update_data['expectation'].dict()
 
-    # 更新
     updated_profile = crud_profile.update_profile(db, profile.id, update_data)
 
     return ResponseModel(
@@ -230,7 +258,8 @@ async def delete_profile(
 ):
     """
     删除资料
-    ★ 更新：支持 pending、rejected、approved、published 状态删除
+    ★ 支持 pending、rejected、approved、published 状态
+    ★ 删除时自动清理COS上该用户所有照片
     """
     profile = crud_profile.get_profile_by_openid(db, openid)
 
@@ -240,7 +269,6 @@ async def delete_profile(
             detail="资料不存在"
         )
 
-    # ★ 放宽限制：允许 pending, rejected, approved, published 状态删除
     allowed_statuses = ['pending', 'rejected', 'approved', 'published']
     if profile.status not in allowed_statuses:
         raise HTTPException(
@@ -248,28 +276,10 @@ async def delete_profile(
             detail=f"当前状态({profile.status})不允许删除"
         )
 
-    # ★ 如果有COS照片，尝试清理（静默失败）
-    if profile.photos:
-        try:
-            from app.core.config import settings as app_settings
-            if app_settings.COS_SECRET_ID and app_settings.COS_DOMAIN:
-                from qcloud_cos import CosConfig, CosS3Client
-                config = CosConfig(
-                    Region=app_settings.COS_REGION,
-                    SecretId=app_settings.COS_SECRET_ID,
-                    SecretKey=app_settings.COS_SECRET_KEY,
-                )
-                client = CosS3Client(config)
-                for photo_url in profile.photos:
-                    if photo_url and photo_url.startswith(app_settings.COS_DOMAIN):
-                        cos_key = photo_url.replace(app_settings.COS_DOMAIN + "/", "")
-                        try:
-                            client.delete_object(Bucket=app_settings.COS_BUCKET, Key=cos_key)
-                        except Exception:
-                            pass
-        except Exception:
-            pass  # COS清理失败不影响删除操作
+    # ★ 清理COS上该用户的所有照片（按目录批量删除）
+    _cleanup_user_cos_photos(openid)
 
+    # 删除数据库记录
     crud_profile.delete_profile(db, profile.id)
 
     return ResponseModel(

@@ -1,6 +1,7 @@
 """
 文件上传相关API - COS版本
 上传照片到腾讯云COS对象存储
+目录结构: photos/{user_openid}/{uuid}.{ext}
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
@@ -17,9 +18,7 @@ router = APIRouter()
 
 
 def _get_cos_client():
-    """
-    获取COS客户端实例
-    """
+    """获取COS客户端实例"""
     try:
         from qcloud_cos import CosConfig, CosS3Client
 
@@ -51,6 +50,7 @@ async def upload_photo(
 ):
     """
     上传照片到COS
+    存储路径: photos/{openid}/{uuid}.{ext}
     """
     # 1. 验证文件类型
     if not file.filename:
@@ -77,9 +77,10 @@ async def upload_photo(
             detail=f"文件过大。最大允许: {settings.MAX_UPLOAD_SIZE / 1024 / 1024}MB"
         )
 
-    # 3. 生成唯一文件名
-    unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
-    cos_key = f"{settings.COS_UPLOAD_PREFIX}/{unique_filename}"
+    # 3. ★ 生成路径: photos/{openid}/{uuid}.{ext}
+    photo_id = uuid.uuid4().hex
+    unique_filename = f"{photo_id}.{file_ext}"
+    cos_key = f"{settings.COS_UPLOAD_PREFIX}/{openid}/{unique_filename}"
 
     # 4. 上传到COS
     try:
@@ -128,8 +129,8 @@ async def delete_photo(
         db: Session = Depends(get_db)
 ):
     """
-    删除照片
-    支持删除COS上的照片和本地照片
+    删除单张照片
+    ★ 安全校验：只允许删除自己目录下的照片
     """
     photo_url = body.url
 
@@ -139,10 +140,18 @@ async def delete_photo(
             detail="照片URL不能为空"
         )
 
-    # 判断是COS URL还是本地URL
+    # COS照片
     if settings.COS_DOMAIN and photo_url.startswith(settings.COS_DOMAIN):
-        # COS照片：提取key并删除
         cos_key = photo_url.replace(settings.COS_DOMAIN + "/", "")
+
+        # ★ 安全校验：确保只能删除自己目录下的照片
+        expected_prefix = f"{settings.COS_UPLOAD_PREFIX}/{openid}/"
+        if not cos_key.startswith(expected_prefix):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权删除此照片"
+            )
+
         try:
             client = _get_cos_client()
             client.delete_object(
@@ -154,12 +163,11 @@ async def delete_photo(
             raise
         except Exception as e:
             logger.warning(f"COS删除失败（可能文件不存在）: {e}")
-            # 不抛异常，因为文件可能已经不存在
 
+    # 本地照片（兼容旧数据）
     elif photo_url.startswith("/uploads/"):
-        # 本地照片：删除本地文件
         import os
-        local_path = "." + photo_url  # /uploads/photos/xxx.jpg -> ./uploads/photos/xxx.jpg
+        local_path = "." + photo_url
         if os.path.exists(local_path):
             try:
                 os.remove(local_path)
@@ -170,4 +178,48 @@ async def delete_photo(
     return ResponseModel(
         success=True,
         message="删除成功"
+    )
+
+
+@router.delete("/photos/all", response_model=ResponseModel)
+async def delete_all_photos(
+        openid: str = Depends(get_current_user_openid),
+        db: Session = Depends(get_db)
+):
+    """
+    ★ 删除用户所有照片（删除档案时调用）
+    直接删除 photos/{openid}/ 目录下所有文件
+    """
+    prefix = f"{settings.COS_UPLOAD_PREFIX}/{openid}/"
+
+    try:
+        client = _get_cos_client()
+
+        # 列出该用户目录下所有文件
+        response = client.list_objects(
+            Bucket=settings.COS_BUCKET,
+            Prefix=prefix,
+            MaxKeys=100,
+        )
+
+        # 批量删除
+        contents = response.get('Contents', [])
+        if contents:
+            delete_objects = [{'Key': obj['Key']} for obj in contents]
+            client.delete_objects(
+                Bucket=settings.COS_BUCKET,
+                Delete={'Object': delete_objects, 'Quiet': 'true'},
+            )
+            logger.info(f"批量删除成功: {openid} 目录下 {len(delete_objects)} 个文件")
+        else:
+            logger.info(f"用户 {openid} 目录下无文件")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"批量删除失败: {e}")
+
+    return ResponseModel(
+        success=True,
+        message="全部照片已删除"
     )
