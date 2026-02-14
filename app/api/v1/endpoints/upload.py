@@ -1,16 +1,46 @@
 """
-文件上传相关API - 完整实现
+文件上传相关API - COS版本
+上传照片到腾讯云COS对象存储
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_user_openid
 from app.core.config import settings
 from app.schemas.common import ResponseModel
-import os
+from pydantic import BaseModel
 import uuid
-from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_cos_client():
+    """
+    获取COS客户端实例
+    """
+    try:
+        from qcloud_cos import CosConfig, CosS3Client
+
+        config = CosConfig(
+            Region=settings.COS_REGION,
+            SecretId=settings.COS_SECRET_ID,
+            SecretKey=settings.COS_SECRET_KEY,
+        )
+        return CosS3Client(config)
+    except ImportError:
+        logger.error("cos-python-sdk-v5 未安装，请运行: pip install cos-python-sdk-v5")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="COS SDK未安装"
+        )
+    except Exception as e:
+        logger.error(f"COS客户端初始化失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="COS配置错误"
+        )
 
 
 @router.post("/photo", response_model=ResponseModel)
@@ -20,9 +50,15 @@ async def upload_photo(
         db: Session = Depends(get_db)
 ):
     """
-    上传照片
+    上传照片到COS
     """
     # 1. 验证文件类型
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="文件名不能为空"
+        )
+
     file_ext = file.filename.split('.')[-1].lower()
 
     if file_ext not in settings.ALLOWED_EXTENSIONS:
@@ -31,8 +67,7 @@ async def upload_photo(
             detail=f"不支持的文件格式。允许的格式: {', '.join(settings.ALLOWED_EXTENSIONS)}"
         )
 
-    # 2. 检查文件大小
-    # 读取内容
+    # 2. 读取文件内容并检查大小
     content = await file.read()
     file_size = len(content)
 
@@ -44,26 +79,95 @@ async def upload_photo(
 
     # 3. 生成唯一文件名
     unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
+    cos_key = f"{settings.COS_UPLOAD_PREFIX}/{unique_filename}"
 
-    # 4. 确保上传目录存在
-    upload_dir = Path(settings.UPLOAD_DIR)
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    # 4. 上传到COS
+    try:
+        client = _get_cos_client()
 
-    # 5. 保存文件
-    file_path = upload_dir / unique_filename
+        response = client.put_object(
+            Bucket=settings.COS_BUCKET,
+            Body=content,
+            Key=cos_key,
+            ContentType=file.content_type or f"image/{file_ext}",
+        )
 
-    with open(file_path, "wb") as f:
-        f.write(content)
+        logger.info(f"COS上传成功: {cos_key}, ETag: {response.get('ETag', '')}")
 
-    # 6. 生成访问URL
-    # 注意：这里假设Nginx配置了 /uploads 路径映射
-    file_url = f"/uploads/photos/{unique_filename}"
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"COS上传失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="照片上传失败，请稍后重试"
+        )
+
+    # 5. 生成访问URL
+    file_url = f"{settings.COS_DOMAIN}/{cos_key}"
 
     return ResponseModel(
         success=True,
         message="上传成功",
         data={
             "url": file_url,
-            "filename": unique_filename
+            "filename": unique_filename,
+            "cos_key": cos_key,
         }
+    )
+
+
+class DeletePhotoRequest(BaseModel):
+    url: str
+
+
+@router.delete("/photo", response_model=ResponseModel)
+async def delete_photo(
+        body: DeletePhotoRequest,
+        openid: str = Depends(get_current_user_openid),
+        db: Session = Depends(get_db)
+):
+    """
+    删除照片
+    支持删除COS上的照片和本地照片
+    """
+    photo_url = body.url
+
+    if not photo_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="照片URL不能为空"
+        )
+
+    # 判断是COS URL还是本地URL
+    if settings.COS_DOMAIN and photo_url.startswith(settings.COS_DOMAIN):
+        # COS照片：提取key并删除
+        cos_key = photo_url.replace(settings.COS_DOMAIN + "/", "")
+        try:
+            client = _get_cos_client()
+            client.delete_object(
+                Bucket=settings.COS_BUCKET,
+                Key=cos_key,
+            )
+            logger.info(f"COS删除成功: {cos_key}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"COS删除失败（可能文件不存在）: {e}")
+            # 不抛异常，因为文件可能已经不存在
+
+    elif photo_url.startswith("/uploads/"):
+        # 本地照片：删除本地文件
+        import os
+        local_path = "." + photo_url  # /uploads/photos/xxx.jpg -> ./uploads/photos/xxx.jpg
+        if os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+                logger.info(f"本地文件删除成功: {local_path}")
+            except Exception as e:
+                logger.warning(f"本地文件删除失败: {e}")
+
+    return ResponseModel(
+        success=True,
+        message="删除成功"
     )

@@ -71,7 +71,7 @@ async def submit_profile(
     if profile_data.get('expectation') and hasattr(profile_data['expectation'], 'dict'):
         profile_data['expectation'] = profile_data['expectation'].dict()
 
-    # 4. 创建资料
+    # 创建资料
     profile = crud_profile.create_profile(db, openid, profile_data)
 
     return ResponseModel(
@@ -229,7 +229,8 @@ async def delete_profile(
         db: Session = Depends(get_db)
 ):
     """
-    删除资料（仅 pending/rejected 状态可删除）
+    删除资料
+    ★ 更新：支持 pending、rejected、approved、published 状态删除
     """
     profile = crud_profile.get_profile_by_openid(db, openid)
 
@@ -239,11 +240,35 @@ async def delete_profile(
             detail="资料不存在"
         )
 
-    if profile.status not in ['pending', 'rejected']:
+    # ★ 放宽限制：允许 pending, rejected, approved, published 状态删除
+    allowed_statuses = ['pending', 'rejected', 'approved', 'published']
+    if profile.status not in allowed_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"当前状态({profile.status})不允许删除"
         )
+
+    # ★ 如果有COS照片，尝试清理（静默失败）
+    if profile.photos:
+        try:
+            from app.core.config import settings as app_settings
+            if app_settings.COS_SECRET_ID and app_settings.COS_DOMAIN:
+                from qcloud_cos import CosConfig, CosS3Client
+                config = CosConfig(
+                    Region=app_settings.COS_REGION,
+                    SecretId=app_settings.COS_SECRET_ID,
+                    SecretKey=app_settings.COS_SECRET_KEY,
+                )
+                client = CosS3Client(config)
+                for photo_url in profile.photos:
+                    if photo_url and photo_url.startswith(app_settings.COS_DOMAIN):
+                        cos_key = photo_url.replace(app_settings.COS_DOMAIN + "/", "")
+                        try:
+                            client.delete_object(Bucket=app_settings.COS_BUCKET, Key=cos_key)
+                        except Exception:
+                            pass
+        except Exception:
+            pass  # COS清理失败不影响删除操作
 
     crud_profile.delete_profile(db, profile.id)
 

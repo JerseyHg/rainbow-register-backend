@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 5242880
     ALLOWED_EXTENSIONS: Union[List[str], str] = "jpg,jpeg,png,webp"
 
+    # ★ 腾讯云 COS 配置
+    COS_SECRET_ID: str = ""
+    COS_SECRET_KEY: str = ""
+    COS_REGION: str = "ap-shanghai"
+    COS_BUCKET: str = "tbowo-1259330613"
+    COS_DOMAIN: str = "https://tbowo-1259330613.cos.ap-shanghai.myqcloud.com"
+    COS_UPLOAD_PREFIX: str = "photos"  # COS中的目录前缀
+
     INVITATION_CODE_LENGTH: int = 6
     INVITATION_EXPIRE_DAYS: int = 7
     DEFAULT_INVITATION_QUOTA: int = 2

@@ -30,3 +30,6 @@ openpyxl>=3.1.2
 
 # 工具
 python-dotenv>=1.0.1
+
+# ★ 腾讯云COS对象存储
+cos-python-sdk-v5>=1.9.30
