@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.services.invitation import generate_invitation_code, calculate_expire_time
 import logging
 
+from app.crud.crud_settings import get_setting_bool
 from fastapi import BackgroundTasks
 import asyncio
 
@@ -323,3 +324,12 @@ async def delete_profile(
         success=True,
         message="已删除"
     )
+
+@router.get("/ai-review-enabled", response_model=ResponseModel)
+async def get_ai_review_enabled(db: Session = Depends(get_db)):
+    """
+    公开端点：查询 AI 自动审核是否开启
+    小程序前端用于判断是否需要预填模板
+    """
+    enabled = get_setting_bool(db, "ai_auto_review")
+    return ResponseModel(success=True, message="ok", data={"enabled": enabled})
