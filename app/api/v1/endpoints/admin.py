@@ -17,6 +17,9 @@ from datetime import timedelta
 from collections import defaultdict
 from app.core.city_coordinates import CITY_COORDINATES
 
+from app.crud.crud_settings import get_all_settings, get_setting, set_setting, get_setting_bool
+from app.services.ai_review_trigger import trigger_ai_review
+
 router = APIRouter()
 
 
@@ -477,3 +480,162 @@ async def get_map_users(
                   "top_city": cities[0]["city"] if cities else None,
                   "top_city_count": cities[0]["count"] if cities else 0}
     })
+
+# ============================================================
+# 新增端点：系统设置（AI审核开关等）
+# ============================================================
+
+@router.get("/settings", response_model=ResponseModel)
+async def get_system_settings(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """获取所有系统设置"""
+    all_settings = get_all_settings(db)
+    return ResponseModel(success=True, message="获取成功", data=all_settings)
+
+@router.post("/settings/{key}", response_model=ResponseModel)
+async def update_system_setting(
+        key: str,
+        request: dict,  # {"value": "true"}
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """更新单个系统设置"""
+    value = request.get("value")
+    if value is None:
+        raise HTTPException(status_code=400, detail="缺少 value 参数")
+
+    row = set_setting(db, key=key, value=str(value), updated_by=admin.get("sub", "admin"))
+    return ResponseModel(success=True, message=f"设置 {key} 已更新", data={
+        "key": row.key,
+        "value": row.value,
+        "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else None,
+    })
+
+
+@router.get("/settings/ai-review/status", response_model=ResponseModel)
+async def get_ai_review_status(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """获取 AI 审核开关状态（便捷端点）"""
+    enabled = get_setting_bool(db, "ai_auto_review")
+    return ResponseModel(success=True, message="获取成功", data={"enabled": enabled})
+
+
+@router.post("/settings/ai-review/toggle", response_model=ResponseModel)
+async def toggle_ai_review(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """切换 AI 审核开关"""
+    current = get_setting_bool(db, "ai_auto_review")
+    new_value = "false" if current else "true"
+    set_setting(db, key="ai_auto_review", value=new_value, updated_by=admin.get("sub", "admin"))
+
+    status_text = "已开启" if new_value == "true" else "已关闭"
+    return ResponseModel(success=True, message=f"AI 自动审核{status_text}", data={
+        "enabled": new_value == "true",
+    })
+
+# ============================================================
+# 新增端点：手动触发 AI 审核
+# ============================================================
+
+@router.post("/profile/{profile_id}/ai-review", response_model=ResponseModel)
+async def manual_ai_review(
+        profile_id: int,
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """
+    手动触发单个资料的 AI 审核
+    ★ 注意：手动触发不受开关限制，始终执行
+    """
+    from app.services.ai_review import auto_review_profile
+    from app.crud import crud_profile as _crud
+
+    profile = _crud.get_profile_by_id(db, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    if profile.status != "pending":
+        raise HTTPException(status_code=400, detail=f"当前状态({profile.status})不允许审核")
+
+    # 直接调用 AI 审核核心逻辑（绕过开关检查）
+    profile_data = {
+        "name": profile.name, "gender": profile.gender, "age": profile.age,
+        "height": profile.height, "weight": profile.weight,
+        "marital_status": profile.marital_status, "body_type": profile.body_type,
+        "hometown": profile.hometown, "work_location": profile.work_location,
+        "industry": profile.industry, "constellation": profile.constellation,
+        "mbti": profile.mbti, "health_condition": profile.health_condition,
+        "housing_status": profile.housing_status, "dating_purpose": profile.dating_purpose,
+        "want_children": profile.want_children, "wechat_id": profile.wechat_id,
+        "coming_out_status": profile.coming_out_status, "hobbies": profile.hobbies,
+        "lifestyle": profile.lifestyle, "activity_expectation": profile.activity_expectation,
+        "expectation": profile.expectation,
+        "special_requirements": profile.special_requirements,
+    }
+
+    action, reason, extracted = await auto_review_profile(profile_data)
+
+    if action == "reject":
+        _crud.reject_profile(db, profile_id, reviewed_by="AI_MANUAL", reason=reason)
+        return ResponseModel(success=True, message="AI已拒绝", data={"action": "reject", "reason": reason})
+    elif action == "pass":
+        if extracted:
+            update_data = {}
+            for field in ["marital_status", "health_condition", "housing_status",
+                          "dating_purpose", "want_children", "coming_out_status"]:
+                new_val = extracted.get(field)
+                old_val = getattr(profile, field, None)
+                if new_val and isinstance(new_val, str) and new_val.strip() and not old_val:
+                    update_data[field] = new_val.strip()
+            if extracted.get("expectation"):
+                import json
+                old_exp = profile.expectation or {}
+                if isinstance(old_exp, str):
+                    try: old_exp = json.loads(old_exp)
+                    except: old_exp = {}
+                merged = {**old_exp}
+                for k, v in extracted["expectation"].items():
+                    if v and isinstance(v, str) and v.strip() and not merged.get(k):
+                        merged[k] = v.strip()
+                update_data["expectation"] = merged
+            update_data["review_notes"] = "AI手动审核-已提取补充信息"
+            if update_data:
+                _crud.update_profile(db, profile_id, update_data)
+        return ResponseModel(success=True, message="AI审核通过，等待终审",
+                             data={"action": "pass", "extracted_fields": extracted})
+    else:
+        return ResponseModel(success=True, message="AI分析异常", data={"action": "error"})
+
+
+@router.post("/ai-review/batch", response_model=ResponseModel)
+async def batch_ai_review(
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """批量对所有 pending 资料触发 AI 审核（不受开关限制）"""
+    pending = crud_profile.get_pending_profiles(db, skip=0, limit=100)
+    results = {"total": len(pending), "rejected": 0, "passed": 0, "errors": 0, "details": []}
+
+    for p in pending:
+        try:
+            # 手动批量触发也绕过开关
+            result = await trigger_ai_review.__wrapped__(db, p.id) if hasattr(trigger_ai_review, '__wrapped__') else await trigger_ai_review(db, p.id)
+            action = result["action"]
+            if action == "reject":
+                results["rejected"] += 1
+            elif action == "pass":
+                results["passed"] += 1
+            else:
+                results["errors"] += 1
+            results["details"].append({"id": p.id, "name": p.name, "action": action})
+        except Exception as e:
+            logger.error(f"批量审核失败 id={p.id}: {e}")
+            results["errors"] += 1
+            results["details"].append({"id": p.id, "name": p.name, "action": "error"})
+
+    return ResponseModel(success=True, message="批量审核完成", data=results)

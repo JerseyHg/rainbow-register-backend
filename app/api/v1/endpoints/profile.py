@@ -13,10 +13,42 @@ from app.core.config import settings
 from app.services.invitation import generate_invitation_code, calculate_expire_time
 import logging
 
+from fastapi import BackgroundTasks
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def _run_ai_review_background(profile_id: int):
+    """
+    后台执行 AI 审核
+    ★ 开关判断在 trigger_ai_review 内部通过数据库查询完成
+    ★ 如果开关关闭，trigger 会直接返回 skip，不会调用 AI
+    """
+    from app.db.base import SessionLocal
+    from app.services.ai_review_trigger import trigger_ai_review
+    from app.core.config import settings
+
+    # 即使开关在数据库中，也需要 API_KEY 才有意义
+    if not settings.AI_API_KEY:
+        return
+
+    db = None
+    loop = None
+    try:
+        db = SessionLocal()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(trigger_ai_review(db, profile_id))
+        logger.info(f"AI后台审核: profile_id={profile_id}, action={result['action']}")
+    except Exception as e:
+        logger.error(f"AI后台审核失败: profile_id={profile_id}, error={e}")
+    finally:
+        if db:
+            db.close()
+        if loop:
+            loop.close()
 
 def _cleanup_user_cos_photos(openid: str):
     """
@@ -60,6 +92,7 @@ def _cleanup_user_cos_photos(openid: str):
 @router.post("/submit", response_model=ResponseModel)
 async def submit_profile(
         request: ProfileSubmitRequest,
+        background_tasks: BackgroundTasks,
         openid: str = Depends(get_current_user_openid),
         db: Session = Depends(get_db)
 ):
@@ -108,6 +141,7 @@ async def submit_profile(
         profile_data['expectation'] = profile_data['expectation'].dict()
 
     profile = crud_profile.create_profile(db, openid, profile_data)
+    background_tasks.add_task(_run_ai_review_background, profile.id)
 
     return ResponseModel(
         success=True,
@@ -173,6 +207,7 @@ async def get_my_profile(
 @router.put("/update", response_model=ResponseModel)
 async def update_profile(
         request: ProfileSubmitRequest,
+        background_tasks: BackgroundTasks,
         openid: str = Depends(get_current_user_openid),
         db: Session = Depends(get_db)
 ):
@@ -210,6 +245,8 @@ async def update_profile(
         update_data['expectation'] = update_data['expectation'].dict()
 
     updated_profile = crud_profile.update_profile(db, profile.id, update_data)
+
+    background_tasks.add_task(_run_ai_review_background, updated_profile.id)
 
     return ResponseModel(
         success=True,

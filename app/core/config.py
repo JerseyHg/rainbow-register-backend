@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "change_this_password"
 
+    # ===== AI 自动审核（智谱 GLM） =====
+    AI_API_KEY: str = ""
+    AI_API_URL: str = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    AI_API_TYPE: str = "openai"  # 智谱用 openai 兼容格式
+    AI_MODEL: str = "glm-4.7-flash"  # 免费模型
+
     CORS_ORIGINS: Union[List[str], str] = "*"
 
     @field_validator('ALLOWED_EXTENSIONS', mode='before')
