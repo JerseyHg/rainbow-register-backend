@@ -19,6 +19,7 @@ from app.core.city_coordinates import CITY_COORDINATES
 
 from app.crud.crud_settings import get_all_settings, get_setting, set_setting, get_setting_bool
 from app.services.ai_review_trigger import trigger_ai_review
+from app.services.ai_post_generator import generate_ai_post_html
 
 router = APIRouter()
 
@@ -639,3 +640,91 @@ async def batch_ai_review(
             results["details"].append({"id": p.id, "name": p.name, "action": "error"})
 
     return ResponseModel(success=True, message="批量审核完成", data=results)
+
+@router.post("/profile/{profile_id}/generate-post", response_model=ResponseModel)
+async def generate_post_file(
+        profile_id: int,
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """
+    AI 生成公众号文案 HTML 文件，上传到 COS
+    返回下载链接
+    """
+    profile = crud_profile.get_profile_by_id(db, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="资料不存在")
+
+    # 构造 profile dict
+    profile_dict = {
+        "serial_number": profile.serial_number,
+        "gender": profile.gender,
+        "age": profile.age,
+        "height": profile.height,
+        "weight": profile.weight,
+        "marital_status": profile.marital_status,
+        "body_type": profile.body_type,
+        "hometown": profile.hometown,
+        "work_location": profile.work_location,
+        "industry": profile.industry,
+        "health_condition": profile.health_condition,
+        "constellation": profile.constellation,
+        "mbti": profile.mbti,
+        "coming_out_status": profile.coming_out_status,
+        "dating_purpose": profile.dating_purpose,
+        "want_children": profile.want_children,
+        "lifestyle": profile.lifestyle,
+        "activity_expectation": profile.activity_expectation,
+        "hobbies": profile.hobbies,
+        "expectation": profile.expectation,
+        "special_requirements": profile.special_requirements,
+        "admin_contact": profile.admin_contact,
+        "photos": profile.photos,
+    }
+
+    # 生成 HTML
+    result = await generate_ai_post_html(profile_dict)
+    html_content = result["html"]
+    title = result["title"]
+
+    # 上传到 COS
+    cos_url = None
+    try:
+        from qcloud_cos import CosConfig, CosS3Client
+        from io import BytesIO
+        import uuid
+
+        config = CosConfig(
+            Region=settings.COS_REGION,
+            SecretId=settings.COS_SECRET_ID,
+            SecretKey=settings.COS_SECRET_KEY,
+        )
+        client = CosS3Client(config)
+
+        file_id = uuid.uuid4().hex[:8]
+        cos_key = f"posts/{profile.serial_number}/{file_id}.html"
+
+        client.put_object(
+            Bucket=settings.COS_BUCKET,
+            Body=html_content.encode("utf-8"),
+            Key=cos_key,
+            ContentType="text/html; charset=utf-8",
+        )
+
+        cos_url = f"{settings.COS_DOMAIN}/{cos_key}"
+        logger.info(f"文案已上传: {cos_url}")
+
+    except Exception as e:
+        logger.warning(f"COS上传失败（返回HTML内容）: {e}")
+
+    return ResponseModel(
+        success=True,
+        message="文案生成成功",
+        data={
+            "title": title,
+            "ai_generated": result["ai_generated"],
+            "html": html_content,
+            "download_url": cos_url,
+            "serial_number": profile.serial_number,
+        },
+    )
