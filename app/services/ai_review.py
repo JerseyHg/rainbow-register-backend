@@ -36,6 +36,28 @@ EXPECTATION_FIELDS = {
 }
 
 
+def _collect_user_text(profile_data: dict) -> str:
+    """
+    从「自我描述」「对活动的期望」「备注」三个字段中收集用户填写的所有文本
+    合并后供 AI 统一解析
+    """
+    parts = []
+
+    lifestyle = profile_data.get("lifestyle") or ""
+    if lifestyle.strip():
+        parts.append(f"【自我描述】\n{lifestyle.strip()}")
+
+    activity = profile_data.get("activity_expectation") or ""
+    if activity.strip():
+        parts.append(f"【对活动的期望】\n{activity.strip()}")
+
+    special = profile_data.get("special_requirements") or ""
+    if special.strip():
+        parts.append(f"【备注】\n{special.strip()}")
+
+    return "\n\n".join(parts)
+
+
 def _get_missing_fields(profile_data: dict) -> Dict[str, str]:
     """检测资料中缺失的字段，返回 {字段名: 字段描述}"""
     missing = {}
@@ -168,12 +190,13 @@ async def _call_ai_api(prompt: str, system_prompt: str = "") -> Optional[str]:
 
 
 async def _ai_extract_fields(
-    special_requirements: str,
+    user_text: str,
     missing_fields: Dict[str, str],
     profile_context: dict,
 ) -> Optional[dict]:
-    """让 AI 从备注文本中提取结构化字段"""
-    system_prompt = """你是一个数据提取助手。用户在备注中补充了个人信息，请从中提取出结构化数据。
+    """让 AI 从用户填写的多个文本字段中提取结构化数据"""
+    system_prompt = """你是一个数据提取助手。用户在表单的多个文本栏中填写了个人信息，请从中提取出结构化数据。
+信息可能分散在「自我描述」「对活动的期望」「备注」等不同栏目中，请综合分析所有内容。
 请严格按照 JSON 格式返回，不要添加任何其他文字或 markdown 标记。
 如果某个字段在文本中找不到对应信息，该字段值设为 null。"""
 
@@ -184,12 +207,12 @@ async def _ai_extract_fields(
 性别: {profile_context.get('gender', '未知')}
 年龄: {profile_context.get('age', '未知')}
 
-用户在备注栏补充的文本内容：
+用户在表单中填写的文本内容（可能分布在多个栏目）：
 \"\"\"
-{special_requirements}
+{user_text}
 \"\"\"
 
-请从上述文本中提取以下字段：
+请从上述所有文本中综合提取以下字段：
 {fields_desc}
 
 请返回 JSON 格式，字段名使用英文 key。
@@ -254,19 +277,19 @@ async def auto_review_profile(profile_data: dict) -> Tuple[str, Optional[str], O
         logger.info(f"资料完整，AI 审核通过: {profile_data.get('name', '?')}")
         return "pass", None, None
 
-    # 2. 有缺失 → 检查备注是否有补充
-    special_req = profile_data.get("special_requirements") or ""
+    # 2. 有缺失 → 检查所有文本字段是否有补充信息
+    user_text = _collect_user_text(profile_data)
 
-    if not special_req.strip():
-        # 备注为空 → 直接拒绝（不调用 AI，零成本）
+    if not user_text.strip():
+        # 所有文本字段都为空 → 直接拒绝（不调用 AI，零成本）
         reason = _build_rejection_message(missing)
-        logger.info(f"缺失 {len(missing)} 个字段且备注为空，自动拒绝: {profile_data.get('name', '?')}")
+        logger.info(f"缺失 {len(missing)} 个字段且无文本内容，自动拒绝: {profile_data.get('name', '?')}")
         return "reject", reason, None
 
-    # 3. 备注不为空 → 调用 AI 解析
-    logger.info(f"尝试从备注中提取 {len(missing)} 个缺失字段: {profile_data.get('name', '?')}")
+    # 3. 有文本内容 → 调用 AI 从「自我描述」「对活动的期望」「备注」中综合提取
+    logger.info(f"尝试从用户文本中提取 {len(missing)} 个缺失字段: {profile_data.get('name', '?')}")
 
-    extracted = await _ai_extract_fields(special_req, missing, profile_data)
+    extracted = await _ai_extract_fields(user_text, missing, profile_data)
 
     if extracted is None:
         logger.warning("AI 提取失败，跳过自动审核")
