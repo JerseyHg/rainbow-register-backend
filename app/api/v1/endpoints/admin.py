@@ -1,7 +1,7 @@
 """
 管理员相关API - 完整实现
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.deps import get_db, get_current_admin
 from app.core.security import verify_password, create_access_token
@@ -15,6 +15,8 @@ from app.models.user_profile import UserProfile
 from app.models.invitation_code import InvitationCode
 from datetime import timedelta
 from collections import defaultdict
+import logging
+import asyncio
 from app.core.city_coordinates import CITY_COORDINATES
 
 from app.crud.crud_settings import get_all_settings, get_setting, set_setting, get_setting_bool
