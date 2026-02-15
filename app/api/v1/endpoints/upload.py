@@ -122,6 +122,7 @@ class DeletePhotoRequest(BaseModel):
     url: str
 
 
+@router.post("/photo/delete", response_model=ResponseModel)
 @router.delete("/photo", response_model=ResponseModel)
 async def delete_photo(
         body: DeletePhotoRequest,
