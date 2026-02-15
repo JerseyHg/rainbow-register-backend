@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     INVITATION_EXPIRE_DAYS: int = 7
     DEFAULT_INVITATION_QUOTA: int = 2
 
+    # ★ 审核放行邀请码（使用这些邀请码提交的资料自动通过审核）
+    REVIEW_BYPASS_CODES: Union[List[str], str] = ""
+
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "change_this_password"
 
@@ -72,5 +75,14 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = True
         extra = "ignore"
+
+    @field_validator('REVIEW_BYPASS_CODES', mode='before')
+    @classmethod
+    def parse_bypass_codes(cls, v):
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            return [code.strip().upper() for code in v.split(',')]
+        return v
 
 settings = Settings()

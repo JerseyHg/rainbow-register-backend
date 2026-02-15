@@ -142,6 +142,39 @@ async def submit_profile(
         profile_data['expectation'] = profile_data['expectation'].dict()
 
     profile = crud_profile.create_profile(db, openid, profile_data)
+
+    # ★ 检查是否为审核放行邀请码
+    bypass_codes = settings.REVIEW_BYPASS_CODES
+    used_code = profile_data.get('invitation_code_used', '')
+    if bypass_codes and used_code.upper() in [c.upper() for c in bypass_codes]:
+        # 自动通过审核
+        crud_profile.approve_profile(
+            db=db,
+            profile_id=profile.id,
+            reviewed_by="AUTO_BYPASS",
+            notes="审核放行邀请码自动通过"
+        )
+        # 生成邀请码配额
+        for _ in range(settings.DEFAULT_INVITATION_QUOTA):
+            code = generate_invitation_code()
+            expire_at = calculate_expire_time()
+            crud_invitation.create_invitation_code(
+                db=db, code=code, created_by=profile.id, created_by_type="user",
+                notes=f"用户{profile.serial_number}的邀请码（放行）", expire_at=expire_at
+            )
+        crud_profile.update_profile(db=db, profile_id=profile.id,
+                                    data={"invitation_quota": settings.DEFAULT_INVITATION_QUOTA})
+        logger.info(f"放行邀请码自动通过: {used_code}, profile_id={profile.id}")
+
+        return ResponseModel(
+            success=True,
+            message="提交成功，已自动通过审核",
+            data={
+                "profile_id": profile.id,
+                "serial_number": profile.serial_number
+            }
+        )
+
     background_tasks.add_task(_run_ai_review_background, profile.id)
 
     return ResponseModel(
