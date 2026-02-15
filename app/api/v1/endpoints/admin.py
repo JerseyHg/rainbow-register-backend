@@ -21,8 +21,86 @@ from app.crud.crud_settings import get_all_settings, get_setting, set_setting, g
 from app.services.ai_review_trigger import trigger_ai_review
 from app.services.ai_post_generator import generate_ai_post_html
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
+def _generate_post_background(profile_id: int):
+    """后台异步生成 AI 文案并上传 COS，保存链接到数据库"""
+    from app.db.base import SessionLocal
+    db = None
+    loop = None
+    try:
+        db = SessionLocal()
+        profile = crud_profile.get_profile_by_id(db, profile_id)
+        if not profile:
+            return
+
+        profile_dict = {
+            "serial_number": profile.serial_number,
+            "gender": profile.gender, "age": profile.age,
+            "height": profile.height, "weight": profile.weight,
+            "marital_status": profile.marital_status,
+            "body_type": profile.body_type,
+            "hometown": profile.hometown,
+            "work_location": profile.work_location,
+            "industry": profile.industry,
+            "health_condition": profile.health_condition,
+            "constellation": profile.constellation,
+            "mbti": profile.mbti,
+            "coming_out_status": profile.coming_out_status,
+            "dating_purpose": profile.dating_purpose,
+            "want_children": profile.want_children,
+            "lifestyle": profile.lifestyle,
+            "activity_expectation": profile.activity_expectation,
+            "hobbies": profile.hobbies,
+            "expectation": profile.expectation,
+            "special_requirements": profile.special_requirements,
+            "admin_contact": profile.admin_contact,
+            "photos": profile.photos,
+        }
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(generate_ai_post_html(profile_dict))
+        html_content = result["html"]
+
+        # 上传 COS
+        cos_url = None
+        try:
+            from qcloud_cos import CosConfig, CosS3Client
+            import uuid
+            config = CosConfig(
+                Region=settings.COS_REGION,
+                SecretId=settings.COS_SECRET_ID,
+                SecretKey=settings.COS_SECRET_KEY,
+            )
+            client = CosS3Client(config)
+            file_id = uuid.uuid4().hex[:8]
+            cos_key = f"posts/{profile.serial_number}/{file_id}.html"
+            client.put_object(
+                Bucket=settings.COS_BUCKET,
+                Body=html_content.encode("utf-8"),
+                Key=cos_key,
+                ContentType="text/html; charset=utf-8",
+            )
+            cos_url = f"{settings.COS_DOMAIN}/{cos_key}"
+        except Exception as e:
+            logger.warning(f"文案COS上传失败: {e}")
+
+        if cos_url:
+            crud_profile.update_profile(db, profile_id, {"post_url": cos_url})
+            logger.info(f"AI文案已生成: profile_id={profile_id}, url={cos_url}")
+        else:
+            logger.warning(f"AI文案COS上传失败: profile_id={profile_id}")
+
+    except Exception as e:
+        logger.error(f"后台生成文案失败: profile_id={profile_id}, error={e}")
+    finally:
+        if db:
+            db.close()
+        if loop:
+            loop.close()
 
 @router.post("/login", response_model=AdminLoginResponse)
 async def admin_login(
@@ -151,17 +229,25 @@ async def preview_post(
         profile_id: int,
         admin: dict = Depends(get_current_admin), db: Session = Depends(get_db)
 ):
-    """预览公众号文案"""
+    """预览公众号文案 — 优先返回 AI 生成的文案"""
     profile = crud_profile.get_profile_by_id(db, profile_id)
     if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
 
+    # ★ 如果有 AI 文案链接，直接返回
+    if profile.post_url:
+        return ResponseModel(success=True, message="获取成功", data={
+            "title": f"档案 №{profile.serial_number}",
+            "content": "",
+            "post_url": profile.post_url,
+            "ai_generated": True,
+        })
+
+    # 没有 AI 文案，用旧模板
     profile_dict = {
         "serial_number": profile.serial_number,
-        "gender": profile.gender,
-        "age": profile.age,
-        "height": profile.height,
-        "weight": profile.weight,
+        "gender": profile.gender, "age": profile.age,
+        "height": profile.height, "weight": profile.weight,
         "marital_status": profile.marital_status,
         "body_type": profile.body_type,
         "hometown": profile.hometown,
@@ -177,15 +263,95 @@ async def preview_post(
         "expectation": profile.expectation,
         "special_requirements": profile.special_requirements,
         "admin_contact": profile.admin_contact,
-        "photos": profile.photos
+        "photos": profile.photos,
     }
     post = generate_post_content(profile_dict)
+    post["post_url"] = None
+    post["ai_generated"] = False
     return ResponseModel(success=True, message="生成成功", data=post)
+
+
+@router.post("/profile/{profile_id}/generate-post", response_model=ResponseModel)
+async def generate_post_file(
+        profile_id: int,
+        admin: dict = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+):
+    """手动生成/重新生成 AI 文案 HTML → 上传 COS → 保存链接"""
+    profile = crud_profile.get_profile_by_id(db, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="资料不存在")
+
+    profile_dict = {
+        "serial_number": profile.serial_number,
+        "gender": profile.gender, "age": profile.age,
+        "height": profile.height, "weight": profile.weight,
+        "marital_status": profile.marital_status,
+        "body_type": profile.body_type,
+        "hometown": profile.hometown,
+        "work_location": profile.work_location,
+        "industry": profile.industry,
+        "health_condition": profile.health_condition,
+        "constellation": profile.constellation,
+        "mbti": profile.mbti,
+        "coming_out_status": profile.coming_out_status,
+        "dating_purpose": profile.dating_purpose,
+        "want_children": profile.want_children,
+        "lifestyle": profile.lifestyle,
+        "activity_expectation": profile.activity_expectation,
+        "hobbies": profile.hobbies,
+        "expectation": profile.expectation,
+        "special_requirements": profile.special_requirements,
+        "admin_contact": profile.admin_contact,
+        "photos": profile.photos,
+    }
+
+    result = await generate_ai_post_html(profile_dict)
+    html_content = result["html"]
+
+    # 上传到 COS
+    cos_url = None
+    try:
+        from qcloud_cos import CosConfig, CosS3Client
+        import uuid
+        config = CosConfig(
+            Region=settings.COS_REGION,
+            SecretId=settings.COS_SECRET_ID,
+            SecretKey=settings.COS_SECRET_KEY,
+        )
+        client = CosS3Client(config)
+        file_id = uuid.uuid4().hex[:8]
+        cos_key = f"posts/{profile.serial_number}/{file_id}.html"
+        client.put_object(
+            Bucket=settings.COS_BUCKET,
+            Body=html_content.encode("utf-8"),
+            Key=cos_key,
+            ContentType="text/html; charset=utf-8",
+        )
+        cos_url = f"{settings.COS_DOMAIN}/{cos_key}"
+
+        # ★ 保存链接到数据库
+        crud_profile.update_profile(db, profile_id, {"post_url": cos_url})
+    except Exception as e:
+        logger.warning(f"COS上传失败: {e}")
+
+    return ResponseModel(
+        success=True,
+        message="文案生成成功",
+        data={
+            "title": result.get("title", f"档案 №{profile.serial_number}"),
+            "ai_generated": result["ai_generated"],
+            "html": html_content,
+            "download_url": cos_url,
+            "serial_number": profile.serial_number,
+        },
+    )
 
 
 @router.post("/profile/{profile_id}/approve", response_model=ResponseModel)
 async def approve_profile(
         profile_id: int, request: ApproveRequest,
+        background_tasks: BackgroundTasks,
         admin: dict = Depends(get_current_admin), db: Session = Depends(get_db)
 ):
     """通过审核"""
@@ -211,6 +377,9 @@ async def approve_profile(
 
     crud_profile.update_profile(db=db, profile_id=profile.id,
                                 data={"invitation_quota": settings.DEFAULT_INVITATION_QUOTA})
+
+    # ★ 审核通过后自动生成 AI 文案（后台异步，不阻塞响应）
+    background_tasks.add_task(_generate_post_background, profile_id)
 
     return ResponseModel(success=True, message="审核通过", data={"generated_codes": generated_codes})
 

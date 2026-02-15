@@ -88,5 +88,8 @@ class UserProfile(Base):
     # 管理员联系方式
     admin_contact = Column(String(50), default='casper_gb', comment="管理员微信")
 
+    # AI 文案
+    post_url = Column(Text, comment="AI生成的公众号文案COS链接")
+
     def __repr__(self):
         return f"<UserProfile(id={self.id}, serial_number={self.serial_number}, name={self.name})>"
