@@ -101,6 +101,8 @@ def _build_rejection_message(missing: Dict[str, str]) -> str:
         lines.append(f"{i}. {desc}")
 
     lines.append("")
+    lines.append("💡 如果某项信息您不方便透露，可以填写「未知」「不想回答」或「保密」，我们完全理解。")
+    lines.append("")
     lines.append("【参考格式（可直接复制后修改）】")
     lines.append("---")
 
@@ -115,11 +117,11 @@ def _build_rejection_message(missing: Dict[str, str]) -> str:
         elif field == "dating_purpose":
             template_parts.append("交友目的：寻找长期伴侣")
         elif field == "want_children":
-            template_parts.append("是否想要孩子：可以考虑")
+            template_parts.append("是否想要孩子：可以考虑（或填「不想回答」）")
         elif field == "coming_out_status":
-            template_parts.append("出柜状态：半出柜")
+            template_parts.append("出柜状态：半出柜（或填「不想回答」）")
         elif field == "expectation":
-            template_parts.append("期待对象：希望对方25-35岁，性格温和，最好在同城")
+            template_parts.append("期待对象：希望对方25-35岁，性格温和，最好在同城（或填「暂无特别要求」）")
 
     lines.extend(template_parts)
     lines.append("---")
@@ -198,7 +200,8 @@ async def _ai_extract_fields(
     system_prompt = """你是一个数据提取助手。用户在表单的多个文本栏中填写了个人信息，请从中提取出结构化数据。
 信息可能分散在「自我描述」「对活动的期望」「备注」等不同栏目中，请综合分析所有内容。
 请严格按照 JSON 格式返回，不要添加任何其他文字或 markdown 标记。
-如果某个字段在文本中找不到对应信息，该字段值设为 null。"""
+如果用户明确表示「未知」「不想回答」「保密」「不方便说」等，请将该字段值设为用户的原始表述（如"不想回答"），而非 null。
+只有当文本中完全没有提及某个字段时，才将该字段值设为 null。"""
 
     fields_desc = "\n".join([f"- {k}: {v}" for k, v in missing_fields.items()])
 
