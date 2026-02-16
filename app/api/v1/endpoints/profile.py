@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 def _run_ai_review_background(profile_id: int):
     """
     后台执行 AI 审核
@@ -50,6 +51,7 @@ def _run_ai_review_background(profile_id: int):
             db.close()
         if loop:
             loop.close()
+
 
 def _cleanup_user_cos_photos(openid: str):
     """
@@ -143,9 +145,9 @@ async def submit_profile(
 
     profile = crud_profile.create_profile(db, openid, profile_data)
 
-    # ★ 检查是否为审核放行邀请码
-    bypass_codes = settings.REVIEW_BYPASS_CODES
+    # ★ 检查是否为审核放行邀请码（用于微信审核场景 - 自动通过）
     used_code = profile_data.get('invitation_code_used', '')
+    bypass_codes = settings.REVIEW_BYPASS_CODES
     if bypass_codes and used_code.upper() in [c.upper() for c in bypass_codes]:
         # 自动通过审核
         crud_profile.approve_profile(
@@ -169,6 +171,26 @@ async def submit_profile(
         return ResponseModel(
             success=True,
             message="提交成功，已自动通过审核",
+            data={
+                "profile_id": profile.id,
+                "serial_number": profile.serial_number
+            }
+        )
+
+    # ★ 检查是否为审核拒绝测试邀请码（用于微信审核场景 - 自动拒绝）
+    reject_codes = settings.REVIEW_REJECT_CODES
+    if reject_codes and used_code.upper() in [c.upper() for c in reject_codes]:
+        crud_profile.reject_profile(
+            db=db,
+            profile_id=profile.id,
+            reviewed_by="AUTO_TEST",
+            reason="信息不完整，请补充以下内容后重新提交：\n\n1. 感情状态（如：单身、离异等）\n2. 健康状况\n3. 住房情况\n4. 交友目的\n5. 出柜状态"
+        )
+        logger.info(f"拒绝测试邀请码自动拒绝: {used_code}, profile_id={profile.id}")
+
+        return ResponseModel(
+            success=True,
+            message="提交成功",
             data={
                 "profile_id": profile.id,
                 "serial_number": profile.serial_number
@@ -357,6 +379,7 @@ async def delete_profile(
         success=True,
         message="已删除"
     )
+
 
 @router.get("/ai-review-enabled", response_model=ResponseModel)
 async def get_ai_review_enabled(db: Session = Depends(get_db)):
