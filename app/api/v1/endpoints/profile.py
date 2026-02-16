@@ -184,7 +184,7 @@ async def submit_profile(
             db=db,
             profile_id=profile.id,
             reviewed_by="AUTO_TEST",
-            reason="信息不完整，请补充以下内容后重新提交：\n\n1. 感情状态（如：单身、离异等）\n2. 健康状况\n3. 住房情况\n4. 交友目的\n5. 出柜状态"
+            reason="信息不完整，请补充后重新提交。"
         )
         logger.info(f"拒绝测试邀请码自动拒绝: {used_code}, profile_id={profile.id}")
 
